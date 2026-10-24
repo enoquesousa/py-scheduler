@@ -7,11 +7,10 @@ import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
 
 import structlog
 
-from py_scheduler.models import WebhookConfig, webhook_url_has_allowed_scheme
+from py_scheduler.models import WebhookConfig, parse_webhook_url
 from py_scheduler.persistence import JobExecutionStore
 
 structured_logger = structlog.get_logger(__name__)
@@ -26,18 +25,19 @@ def _post_http_https(
     body: bytes,
     headers: dict[str, str],
     timeout: float,
+    *,
+    allow_loopback_http: bool = False,
 ) -> int:
-    """POST só para http/https via http.client (sem urlopen / esquemas arbitrários)."""
-    parsed = urlparse(url)
-    scheme = parsed.scheme.lower()
-    if scheme not in ("http", "https"):
-        raise ValueError("apenas http e https são suportados")
+    """POST sem redirects, sem ler corpo e sem credenciais no HTTP local."""
+    parsed = parse_webhook_url(url, allow_loopback_http=allow_loopback_http)
+    scheme = parsed.scheme
+    if scheme == "http" and any(name.lower() == "authorization" for name in headers):
+        raise ValueError("Authorization exige HTTPS")
     host = parsed.hostname
-    if host is None:
-        raise ValueError("URL sem hostname")
+    assert host is not None
     port = parsed.port
     path = parsed.path or "/"
-    if parsed.query:
+    if "?" in url:
         path = f"{path}?{parsed.query}"
 
     if scheme == "https":
@@ -56,9 +56,10 @@ def _post_http_https(
     try:
         conn.request("POST", path, body=body, headers=headers)
         resp = conn.getresponse()
-        code = resp.status
-        resp.read()
-        return code
+        try:
+            return resp.status
+        finally:
+            resp.close()
     finally:
         conn.close()
 
@@ -67,7 +68,7 @@ def _post_http_https(
 class WebhookNotifier:
     """POST HTTP com JSON; não faz nada se `url` estiver vazia ou ausente."""
 
-    _config: WebhookConfig
+    _config: WebhookConfig = field(repr=False)
     # Se definido e `failure_alert_silence_minutes` > 0, o muzzle persiste no SQLite.
     _execution_store: JobExecutionStore | None = None
     _failure_alert_lock: threading.Lock = field(
@@ -147,56 +148,53 @@ class WebhookNotifier:
     def _send(self, payload: dict[str, Any]) -> None:
         url = self._config.url
         assert url is not None
-        url = url.strip()
-        if not webhook_url_has_allowed_scheme(url):
+        metadata = {
+            "job_name": payload.get("job_name"),
+            "webhook_event": payload.get("event"),
+        }
+        try:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            headers = {"Content-Type": "application/json; charset=utf-8"}
+            if self._config.bearer_token is not None:
+                headers["Authorization"] = f"Bearer {self._config.bearer_token}"
+            code = _post_http_https(
+                url,
+                body,
+                headers,
+                self._config.timeout_seconds,
+                allow_loopback_http=self._config.allow_loopback_http,
+            )
+        except (ValueError, TypeError, OverflowError, OSError, http.client.HTTPException) as exc:
             structured_logger.warning(
-                "webhook_delivery_skipped",
-                reason="disallowed_url_scheme",
-                job_name=payload.get("job_name"),
-                webhook_event=payload.get("event"),
+                "webhook_delivery_failed",
+                reason=_delivery_failure_reason(exc),
+                **metadata,
             )
             return
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        hdrs = {"Content-Type": "application/json; charset=utf-8"}
-        try:
-            code = _post_http_https(url, body, hdrs, self._config.timeout_seconds)
-            if code >= 400:
-                structured_logger.warning(
-                    "webhook_delivery_failed",
-                    reason="http_error",
-                    status=code,
-                    job_name=payload.get("job_name"),
-                    webhook_event=payload.get("event"),
-                    error=f"HTTP {code}",
-                )
-            else:
-                structured_logger.debug(
-                    "webhook_sent",
-                    status_code=code,
-                    webhook_event=payload.get("event"),
-                    job_name=payload.get("job_name"),
-                )
-        except ValueError as exc:
-            structured_logger.warning(
-                "webhook_delivery_failed",
-                reason="bad_url",
-                job_name=payload.get("job_name"),
-                webhook_event=payload.get("event"),
-                error=str(exc),
-            )
-        except TimeoutError as exc:
-            structured_logger.warning(
-                "webhook_delivery_failed",
-                reason="timeout",
-                job_name=payload.get("job_name"),
-                webhook_event=payload.get("event"),
-                error=str(exc),
-            )
-        except OSError as exc:
-            structured_logger.warning(
-                "webhook_delivery_failed",
-                reason="os_error",
-                job_name=payload.get("job_name"),
-                webhook_event=payload.get("event"),
-                error=str(exc),
-            )
+        _log_delivery_status(code, metadata)
+
+
+def _delivery_failure_reason(error: Exception) -> str:
+    if isinstance(error, ssl.SSLError):
+        return "tls_error"
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    if isinstance(error, http.client.HTTPException):
+        return "http_protocol_error"
+    if isinstance(error, OSError):
+        return "connection_error"
+    return "invalid_request"
+
+
+def _log_delivery_status(code: int, metadata: dict[str, Any]) -> None:
+    if type(code) is not int or not 100 <= code <= 599:
+        structured_logger.warning("webhook_delivery_failed", reason="invalid_status", **metadata)
+    elif 200 <= code < 300:
+        structured_logger.debug("webhook_sent", status_code=code, **metadata)
+    else:
+        structured_logger.warning(
+            "webhook_delivery_failed",
+            reason="redirect_refused" if 300 <= code < 400 else "http_error",
+            status=code,
+            **metadata,
+        )

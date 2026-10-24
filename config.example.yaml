@@ -20,16 +20,27 @@ metrics_enabled: true
 metrics_host: 127.0.0.1
 metrics_port: 9100
 #
-# Webhook opcional: após esgotar retentativas, envia POST JSON com
-# job_name, error, timestamp. Com notify_on_success: true, envia também
+# Webhook HTTPS opcional: após esgotar retentativas, envia POST JSON genérico com
+# job_id, job_name, erro sanitizado e timestamp. Com notify_on_success: true, envia também
 # após cada execução bem-sucedida (útil para tarefas críticas).
+# O receptor deve aceitar este formato; Slack/Discord podem exigir um adaptador.
+# Injete as variáveis no processo; não há carregamento automático de .env.
+# A URL inteira pode ser secreta (path/query). Não grave credenciais neste YAML.
 #
 # webhook:
-#   url: https://hooks.slack.com/services/...   # ou URL de webhook Discord
+#   url_env: SCHEDULER_WEBHOOK_URL
+#   # Opcional, somente se o receptor validar Authorization: Bearer.
+#   bearer_token_env: SCHEDULER_WEBHOOK_TOKEN
 #   timeout_seconds: 10
 #   # Muzzle: depois de um alerta de falha, não reenvia para o mesmo job por N minutos
 #   # (reduz spam no Slack se a tarefa falha em ciclo). 0 = desligado.
 #   failure_alert_silence_minutes: 30
+#
+# Para um receptor local de desenvolvimento com dados sintéticos:
+# webhook:
+#   url: http://127.0.0.1:9000/events
+#   allow_loopback_http: true
+# Não combine HTTP com bearer_token_env. URLs remotas exigem HTTPS.
 
 jobs:
   - id: exemplo_segundos

@@ -1,13 +1,107 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+import os
+import re
+from dataclasses import dataclass, field
+from ipaddress import ip_address
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import SplitResult, urlsplit
 
 
-def webhook_url_has_allowed_scheme(url: str) -> bool:
-    """True apenas para http/https (evita file:, ftp:, etc. em urlopen)."""
-    return urlparse(url.strip()).scheme.lower() in ("http", "https")
+def webhook_url_has_allowed_scheme(url: str, *, allow_loopback_http: bool = False) -> bool:
+    """Compatibilidade: aplica a politica completa, incluindo o opt-in HTTP local."""
+    try:
+        parse_webhook_url(url, allow_loopback_http=allow_loopback_http)
+    except ValueError:
+        return False
+    return True
+
+
+def parse_webhook_url(url: str, *, allow_loopback_http: bool = False) -> SplitResult:
+    """Valida sem ecoar a capability URL, preservando seu path e query."""
+    message = (
+        "URL de webhook invalida: use HTTPS sem userinfo, fragmento ou espacos; "
+        "HTTP exige allow_loopback_http e um IP loopback literal"
+    )
+    try:
+        if not isinstance(url, str) or not url or not isinstance(allow_loopback_http, bool):
+            raise ValueError
+        if not url.isascii() or any(ord(char) <= 32 or ord(char) == 127 for char in url):
+            raise ValueError
+        if "\\" in url or "#" in url:
+            raise ValueError
+        parsed = urlsplit(url)
+        host = parsed.hostname
+        if not host or parsed.username is not None or parsed.password is not None:
+            raise ValueError
+        _validate_webhook_authority(parsed)
+        if parsed.scheme == "http":
+            if not allow_loopback_http or not ip_address(host).is_loopback:
+                raise ValueError
+        elif parsed.scheme != "https":
+            raise ValueError
+        return parsed
+    except (ValueError, UnicodeError):
+        raise ValueError(message) from None
+
+
+def _validate_webhook_authority(parsed: SplitResult) -> None:
+    host = parsed.hostname
+    assert host is not None
+    if "%" in host:
+        raise ValueError
+    if parsed.netloc.startswith("["):
+        if ip_address(host).version != 6:
+            raise ValueError
+        suffix = parsed.netloc[parsed.netloc.index("]") + 1 :]
+    else:
+        _validate_webhook_host(host)
+        _, separator, port = parsed.netloc.partition(":")
+        suffix = separator + port
+    if suffix and (not suffix.startswith(":") or not suffix[1:].isdigit()):
+        raise ValueError
+    if parsed.port is not None and not 1 <= parsed.port <= 65535:
+        raise ValueError
+
+
+def _validate_webhook_host(host: str) -> None:
+    if len(host) > 253:
+        raise ValueError
+    for label in host.removesuffix(".").split("."):
+        if (
+            not label
+            or len(label) > 63
+            or label.startswith("-")
+            or label.endswith("-")
+            or not all(char.isalnum() or char == "-" for char in label)
+        ):
+            raise ValueError
+
+
+def _webhook_environment(name: str | None, option: str) -> str | None:
+    if name is None:
+        return None
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        raise ValueError(f"{option} deve conter somente um nome de variavel de ambiente valido")
+    value = os.getenv(name)
+    if value is None or not value:
+        raise ValueError(f"A variavel referenciada por {option} deve estar definida e nao vazia")
+    return value
+
+
+def _webhook_number(value: float, option: str, *, allow_zero: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{option} deve ser numerico")
+    try:
+        number = float(value)
+    except OverflowError:
+        raise ValueError(f"{option} deve ser finito") from None
+    if not math.isfinite(number) or number < 0 or (number == 0 and not allow_zero):
+        raise ValueError(
+            f"{option} deve ser finito e {'nao negativo' if allow_zero else 'positivo'}"
+        )
+    return number
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,23 +162,60 @@ class JobConfig:
 
 @dataclass(frozen=True, slots=True)
 class WebhookConfig:
-    """URL opcional para alertas (Slack, Discord, etc.) via POST JSON."""
+    """Endpoint opcional para o payload JSON; segredos resolvidos uma vez do ambiente."""
 
-    url: str | None = None
+    url: str | None = field(default=None, repr=False)
     timeout_seconds: float = 10.0
     # Muzzle: após enviar um alerta de falha para um job, não reenvia por N minutos
     # (evita spam no canal se a tarefa continua a falhar em ciclo). 0 = desligado.
     failure_alert_silence_minutes: float = 0.0
+    url_env: str | None = None
+    bearer_token_env: str | None = None
+    allow_loopback_http: bool = False
+    _bearer_token: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        if self.timeout_seconds <= 0:
-            raise ValueError("WebhookConfig.timeout_seconds deve ser maior que zero")
-        if self.failure_alert_silence_minutes < 0:
-            raise ValueError(
-                "WebhookConfig.failure_alert_silence_minutes deve ser maior ou igual a zero"
-            )
-        if self.url is not None and not webhook_url_has_allowed_scheme(self.url):
-            raise ValueError("WebhookConfig.url deve usar o esquema http ou https")
+        object.__setattr__(
+            self,
+            "timeout_seconds",
+            _webhook_number(
+                self.timeout_seconds,
+                "webhook.timeout_seconds",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "failure_alert_silence_minutes",
+            _webhook_number(
+                self.failure_alert_silence_minutes,
+                "webhook.failure_alert_silence_minutes",
+                allow_zero=True,
+            ),
+        )
+        if not isinstance(self.allow_loopback_http, bool):
+            raise ValueError("webhook.allow_loopback_http deve ser booleano")
+        if self.url is not None and self.url_env is not None:
+            raise ValueError("Configure somente webhook.url ou webhook.url_env")
+        url = (
+            _webhook_environment(self.url_env, "webhook.url_env")
+            if self.url_env is not None
+            else self.url
+        )
+        if url is not None:
+            parse_webhook_url(url, allow_loopback_http=self.allow_loopback_http)
+        token = _webhook_environment(self.bearer_token_env, "webhook.bearer_token_env")
+        if token is not None:
+            if len(token) > 4096 or not re.fullmatch(r"[A-Za-z0-9._~+/\-]+=*", token):
+                raise ValueError("Token Bearer invalido: use de 1 a 4096 caracteres RFC6750 ASCII")
+            if url is None or urlsplit(url).scheme != "https":
+                raise ValueError("Token Bearer de webhook exige uma URL HTTPS")
+        object.__setattr__(self, "url", url)
+        object.__setattr__(self, "_bearer_token", token)
+
+    @property
+    def bearer_token(self) -> str | None:
+        """Credencial apenas em memoria; nao incluir em logs ou serializacoes."""
+        return self._bearer_token
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,13 +247,14 @@ def interval_from_mapping(data: dict[str, Any]) -> IntervalConfig:
 def retry_from_mapping(data: dict[str, Any] | None) -> RetryConfig:
     if data is None:
         return RetryConfig()
-    raw_attempts = data.get("attempts", RetryConfig.attempts)
+    defaults = RetryConfig()
+    raw_attempts = data.get("attempts", defaults.attempts)
     raw_multiplier = data.get(
         "wait_multiplier_seconds",
-        RetryConfig.wait_multiplier_seconds,
+        defaults.wait_multiplier_seconds,
     )
-    raw_min = data.get("wait_min_seconds", RetryConfig.wait_min_seconds)
-    raw_max = data.get("wait_max_seconds", RetryConfig.wait_max_seconds)
+    raw_min = data.get("wait_min_seconds", defaults.wait_min_seconds)
+    raw_max = data.get("wait_max_seconds", defaults.wait_max_seconds)
     return RetryConfig(
         attempts=int(raw_attempts),
         wait_multiplier_seconds=float(raw_multiplier),

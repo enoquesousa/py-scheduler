@@ -5,7 +5,7 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md config.example.yaml ./
 COPY py_scheduler ./py_scheduler
 COPY main.py .
 RUN pip install --no-cache-dir .

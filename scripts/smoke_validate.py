@@ -33,12 +33,15 @@ def _populate_registry(module_name: str) -> JobRegistry:
 
 
 def main() -> int:
-    config_path = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else _default_config()
-    if not config_path.is_file():
-        print(f"config not found: {config_path}", file=sys.stderr)
+    try:
+        config_path = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else _default_config()
+        if not config_path.is_file():
+            print("config not found", file=sys.stderr)
+            return 1
+        cfg = load_scheduler_config(config_path)
+    except Exception as exc:
+        print(f"config validation failed ({type(exc).__name__})", file=sys.stderr)
         return 1
-
-    cfg = load_scheduler_config(config_path)
     module_name = (
         cfg.jobs_register_module
         or os.environ.get("PY_SCHEDULER_JOBS_MODULE")
@@ -47,11 +50,15 @@ def main() -> int:
     try:
         registry = _populate_registry(module_name)
     except Exception as exc:
-        print(f"jobs register failed ({module_name}): {exc}", file=sys.stderr)
+        print(f"jobs register failed ({type(exc).__name__})", file=sys.stderr)
         return 1
 
     app = SchedulerApp(registry, config_path)
-    scheduler = app.build_scheduler(cfg, execution_store=None)
+    try:
+        scheduler = app.build_scheduler(cfg, execution_store=None)
+    except Exception as exc:
+        print(f"scheduler validation failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
     n = len(scheduler.get_jobs())
     print(f"ok: loaded {len(cfg.jobs)} job(s) from config, {n} APScheduler job(s) registered.")
     return 0

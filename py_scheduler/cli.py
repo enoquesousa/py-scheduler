@@ -60,28 +60,23 @@ def main(argv: list[str] | None = None) -> int:
     log = structlog.get_logger("main")
 
     args = argv if argv is not None else sys.argv[1:]
-    config_path = Path(args[0]) if args else _default_config_path()
-
-    if not config_path.is_file():
-        log.error("config_file_not_found", config_path=str(config_path))
+    try:
+        config_path = Path(args[0]) if args else _default_config_path()
+        if not config_path.is_file():
+            log.error("config_file_not_found")
+            return 1
+        cfg = load_scheduler_config(config_path)
+    except Exception as exc:
+        log.error("config_load_failed", error_type=type(exc).__name__)
         return 1
-
-    cfg = load_scheduler_config(config_path)
     module_name = _jobs_register_module_from_env_and_config(cfg.jobs_register_module)
     registry = JobRegistry()
     try:
         _populate_registry(registry, module_name)
-    except (
-        ImportError,
-        ModuleNotFoundError,
-        RuntimeError,
-        AttributeError,
-        ValueError,
-    ) as exc:
+    except Exception as exc:
         log.error(
             "jobs_register_failed",
-            module_name=module_name,
-            error=str(exc),
+            error_type=type(exc).__name__,
         )
         return 1
 
@@ -91,4 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         app.run_forever()
     except KeyboardInterrupt:
         log.info("shutdown_requested")
+    except Exception as exc:
+        log.error("scheduler_failed", error_type=type(exc).__name__)
+        return 1
     return 0

@@ -34,7 +34,7 @@ Example:
 
 ```bash
 docker build -t py-scheduler .
-docker run --rm -p 9100:9100 \
+docker run --rm \
   -v /path/to/config.yaml:/app/config/config.yaml:ro \
   -v py-scheduler-data:/data \
   -e PY_SCHEDULER_JOBS_MODULE=mycompany.scheduler_jobs \
@@ -42,6 +42,10 @@ docker run --rm -p 9100:9100 \
 ```
 
 Set `database_path` in YAML to `/data/scheduler.sqlite` if you want durable history inside the volume.
+
+Modules run with the scheduler's operating-system permissions and environment. Only load trusted packages and configuration. Avoid including credentials in job names, identifiers, exception messages, or your own logs. The scheduler's diagnostic policy cannot prevent arbitrary job code from printing or transmitting its environment.
+
+The default metrics bind is loopback inside the container. See [development.md](development.md) for a deliberate external container bind with host-loopback port publishing and the remaining network boundary.
 
 ## Prometheus metrics
 
