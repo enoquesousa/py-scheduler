@@ -73,7 +73,7 @@ def test_local_boundary_rejects_untrusted_requests_before_collecting_metrics(ove
     app.assert_not_called()
 
 
-@pytest.mark.parametrize("bound_address,guarded", [("127.0.0.1", True), ("0.0.0.0", False)])
+@pytest.mark.parametrize("bound_address,guarded", [("127.0.0.1", True), ("192.0.2.10", False)])
 def test_guard_uses_actual_bound_address_and_preserves_explicit_external_bind(
     bound_address, guarded, monkeypatch
 ):
