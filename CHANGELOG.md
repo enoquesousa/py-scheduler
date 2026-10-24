@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Omit credential-bearing URLs, tokens, response bodies, and raw transport exceptions from webhook diagnostics. Treat redirects as failed delivery and close responses without reading their bodies.
 - Keep job exception classes and execution metadata while removing raw exception values from built-in logs, new history rows, and failure notifications. Preserve retries, original exceptions, and APScheduler error events for in-process consumers.
 - Restrict browser access to the loopback metrics exporter using actual-peer, Host, and Origin checks. Explicit external binds retain their documented unauthenticated scrape behavior.
-- Limit workflow credentials to their jobs, disable checkout credential persistence, and pin actions to reviewed commits. Retain coverage artifacts for pull requests and isolate eligible Codecov uploads and release-only PyPI publishing behind short-lived OIDC credentials.
+- Limit workflow credentials to their jobs, disable checkout credential persistence, and pin actions to reviewed commits. Retain coverage artifacts inside GitHub and disable external Codecov uploads without granting upload credentials. Isolate release-only PyPI publishing behind short-lived OIDC credentials.
 
 ### Fixed
 

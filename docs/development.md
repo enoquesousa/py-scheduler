@@ -39,7 +39,7 @@ Coverage (mirrors CI on Python 3.12):
 pytest --cov=py_scheduler --cov-report=term-missing
 ```
 
-CI retains `coverage.xml` as an artifact for every tested pull request. Codecov upload runs separately with a short-lived OIDC credential for eligible pushes and internal pull requests; Dependabot and forks retain the XML without receiving an upload credential. PyPI publishing similarly grants OIDC only to a separate publication job on a published release. Manual dispatch builds reviewable distribution artifacts and does not publish to PyPI.
+CI retains `coverage.xml` as an artifact for every tested pull request. External Codecov uploads are disabled for all events; the disabled job has no OIDC upload permission or static upload token. Authorize the report and destination explicitly before separately reviewing any future change that enables that transfer. PyPI publishing grants OIDC only to a separate publication job on a published release. Manual dispatch builds reviewable distribution artifacts and does not publish to PyPI.
 
 ## Fast wiring check
 

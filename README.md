@@ -190,7 +190,7 @@ pytest -q
 
 ### Coverage
 
-Coverage is collected on Python **3.12** in CI and retained as an XML workflow artifact, including for fork and Dependabot pull requests. A separate job uploads it to **Codecov** using a short-lived GitHub OIDC credential on eligible pushes and internal pull requests. The workflow does not require `CODECOV_TOKEN`.
+Coverage is collected on Python **3.12** in CI and retained as an XML workflow artifact, including for fork and Dependabot pull requests. Automatic external uploads to **Codecov** are disabled. The pinned Codecov action remains in a disabled job for review; enabling an upload requires explicit authorization of the report and destination and a separate review of the credential configuration. No `CODECOV_TOKEN` or OIDC upload permission is granted to that job.
 
 ```bash
 pip install -e ".[dev]"
