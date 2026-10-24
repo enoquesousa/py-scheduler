@@ -124,13 +124,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: coverage
-    if: >-
-      github.event_name == 'push' ||
-      (github.event.pull_request.head.repo.full_name == github.repository &&
-       github.event.pull_request.user.login != 'dependabot[bot]')
+    # External coverage uploads are disabled. Re-enabling requires explicit
+    # authorization of coverage.xml and the Codecov destination, plus a separate
+    # review of any upload credential. The report stays in GitHub artifacts.
+    if: ${{ false }}
     permissions:
       contents: read
-      id-token: write
     steps:
       - name: Checkout minimal coverage context
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -145,10 +144,9 @@ jobs:
           name: coverage-python312
           path: coverage
 
-      - name: Upload coverage with short-lived OIDC
+      - name: Disabled external coverage upload
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
-          use_oidc: true
           files: coverage/coverage.xml
           disable_search: true
           disable_file_fixes: true
