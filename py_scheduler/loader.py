@@ -47,7 +47,11 @@ def load_scheduler_config(path: str | Path) -> SchedulerConfig:
     """Carrega e valida configuração YAML do agendador."""
     p = Path(path)
     text = p.read_text(encoding="utf-8")
-    data = yaml.safe_load(text)
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        # O erro do parser inclui linhas da fonte, que podem conter uma capability URL.
+        raise ValueError("Configuracao YAML invalida; revise a sintaxe do arquivo") from None
     if not isinstance(data, dict):
         raise ValueError("Raiz do YAML deve ser um mapeamento (objeto)")
     jobs_raw = data.get("jobs")
@@ -96,26 +100,39 @@ def webhook_from_mapping(data: dict[str, Any] | None) -> WebhookConfig:
         return WebhookConfig()
     if not isinstance(data, dict):
         raise ValueError("'webhook' deve ser um mapeamento")
+    allowed = {
+        "url",
+        "url_env",
+        "bearer_token_env",
+        "allow_loopback_http",
+        "timeout_seconds",
+        "failure_alert_silence_minutes",
+    }
+    if data.keys() - allowed:
+        raise ValueError("O bloco webhook contem opcoes desconhecidas")
     raw_url = data.get("url")
     if raw_url is not None and not isinstance(raw_url, str):
         raise ValueError("webhook.url deve ser uma string ou omitido")
-    url = raw_url.strip() if isinstance(raw_url, str) else None
-    if url == "":
+    url = raw_url
+    if isinstance(url, str) and not url.strip():
         url = None
     raw_timeout = data.get("timeout_seconds", 10.0)
-    if not isinstance(raw_timeout, (int, float)):
+    if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):
         raise ValueError("webhook.timeout_seconds deve ser numérico")
     raw_silence = data.get("failure_alert_silence_minutes", 0.0)
     if raw_silence is None:
         silence_minutes = 0.0
-    elif not isinstance(raw_silence, (int, float)):
+    elif isinstance(raw_silence, bool) or not isinstance(raw_silence, (int, float)):
         raise ValueError("webhook.failure_alert_silence_minutes deve ser numérico ou omitido")
     else:
-        silence_minutes = float(raw_silence)
+        silence_minutes = raw_silence
     return WebhookConfig(
         url=url,
-        timeout_seconds=float(raw_timeout),
+        timeout_seconds=raw_timeout,
         failure_alert_silence_minutes=silence_minutes,
+        url_env=data.get("url_env"),
+        bearer_token_env=data.get("bearer_token_env"),
+        allow_loopback_http=data.get("allow_loopback_http", False),
     )
 
 

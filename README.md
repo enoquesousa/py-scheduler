@@ -23,7 +23,7 @@
 
 ---
 
-**py-scheduler** is a small, production-minded **scheduler**: **declare** jobs in YAML (interval triggers), **bind** Python callables from a pluggable `register(registry)` module, **run** them under **APScheduler** with **per-job Tenacity** retries, optional **SQLite** audit rows, optional **HTTP webhooks** after terminal failures (and optionally after successes), and an embedded **Prometheus** exporter. The CLI loads `config.example.yaml` (or a path you pass), imports `PY_SCHEDULER_JOBS_MODULE` (or `jobs_register_module` in YAML), and blocks until **SIGINT**/**SIGTERM**. Canonical repository: `github.com/enoquesousa/py-scheduler`.
+**py-scheduler** is a small, production-minded **scheduler**: **declare** jobs in YAML (interval triggers), **bind** Python callables from a pluggable `register(registry)` module, **run** them under **APScheduler** with **per-job Tenacity** retries, optional **SQLite** audit rows, optional **HTTPS webhooks** after terminal failures (and optionally after successes), and an embedded **Prometheus** exporter. The CLI loads `config.example.yaml` (or a path you pass), imports `PY_SCHEDULER_JOBS_MODULE` (or `jobs_register_module` in YAML), and blocks until interrupted. Canonical repository: `github.com/enoquesousa/py-scheduler`.
 
 ## Demo (quick smoke test)
 
@@ -103,7 +103,7 @@ pip install -e ".[dev]"
 
 ### PyPI
 
-There are **no PyPI install badges** in this README yet because uploads to PyPI run **only on a published GitHub Release** (see `.github/workflows/publish.yml`). The same workflow supports **Run workflow** (manual dispatch): it builds wheels/sdists and uploads **artifacts** for inspection, without publishing. Configure **PyPI trusted publishing** (or a token) for the `pypi` environment for release publishes; then `pip install py-scheduler` works after the first successful publish.
+There are **no PyPI install badges** in this README yet because uploads to PyPI run **only on a published GitHub Release** (see `.github/workflows/publish.yml`). The same workflow supports **Run workflow** (manual dispatch): it builds wheels/sdists and uploads **artifacts** for inspection, without publishing. Configure **PyPI trusted publishing** for this repository and workflow before a release publish; then `pip install py-scheduler` works after the first successful publish. No PyPI password or long-lived API token is configured in the workflow.
 
 **Dependency review** runs as a **CI job on every pull request** (not on plain pushes to `main`), using `actions/dependency-review-action` alongside lint and tests.
 
@@ -130,6 +130,16 @@ With `metrics_enabled: true` (default) and `metrics_port: 9100`:
 ```bash
 curl -s http://127.0.0.1:9100/metrics | head
 ```
+
+The metrics endpoint has no login or TLS. Keep the default loopback bind for a local scraper. An explicit external bind exposes job identifiers, execution timing, failures, and process metrics to reachable clients; protect it with network controls or an authenticated TLS proxy. Do not put credentials in job identifiers or names.
+
+## Authentication and secrets
+
+The CLI runs trusted Python jobs under its operating-system account. It does not provide user accounts, sessions, JWTs, refresh tokens, or a remote job-control API. Configuration and installed job modules must be controlled by trusted operators.
+
+Outbound webhooks require HTTPS by default, validate the receiver's certificate and hostname, and do not follow redirects. Configure a secret URL through `webhook.url_env` and, if the receiver expects it, a Bearer token through `webhook.bearer_token_env`. YAML contains only environment-variable names. There is no automatic `.env` loading. See [configuration.md](docs/configuration.md) for examples and the explicit loopback-only HTTP development option.
+
+Resolved URL and token values exist in process memory. Rotate credentials at the receiver, update the process environment, and restart the scheduler. The scheduler does not sign events or refresh tokens. Webhooks use the project's generic event schema; a receiver must understand that schema or adapt it for a service such as Slack or Discord. See [architecture.md](docs/architecture.md) for the request flow and storage boundaries.
 
 ## Resilience (automatic retries)
 
@@ -180,7 +190,7 @@ pytest -q
 
 ### Coverage
 
-Coverage is collected on Python **3.12** in CI and uploaded to **Codecov**.
+Coverage is collected on Python **3.12** in CI and retained as an XML workflow artifact, including for fork and Dependabot pull requests. Automatic external uploads to **Codecov** are disabled. The pinned Codecov action remains in a disabled job for review; enabling an upload requires explicit authorization of the report and destination and a separate review of the credential configuration. No `CODECOV_TOKEN` or OIDC upload permission is granted to that job.
 
 ```bash
 pip install -e ".[dev]"

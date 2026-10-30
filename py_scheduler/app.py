@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import logging
 import time
+import traceback
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import structlog
 from apscheduler.executors.pool import ThreadPoolExecutor
+from apscheduler.job import Job
 from apscheduler.schedulers import SchedulerNotRunningError
 from apscheduler.schedulers.blocking import BlockingScheduler
 from tenacity import RetryCallState, retry, stop_after_attempt, wait_exponential
@@ -23,6 +26,62 @@ from py_scheduler.registry import JobRegistry
 from py_scheduler.webhooks import WebhookNotifier
 
 structured_logger = structlog.get_logger(__name__)
+_EXECUTOR_LOGGER = "apscheduler.executors.default"
+
+
+def _safe_scheduler_trace(record: logging.LogRecord) -> str:
+    """Keep locations and the exception class without formatting its values or source."""
+    if not record.exc_info:
+        return "Exception: message omitted"
+    _, exception, tb = record.exc_info
+    lines = ["Traceback locations (exception values and source omitted):"]
+    for frame, lineno in traceback.walk_tb(tb):
+        lines.append(
+            f"  File {frame.f_code.co_filename!r}, line {lineno}, in {frame.f_code.co_name}"
+        )
+    lines.append(f"{type(exception).__name__}: message omitted")
+    return "\n".join(lines)
+
+
+def _scheduler_log_job_id(record: logging.LogRecord) -> str | None:
+    if not isinstance(record.args, tuple) or not record.args:
+        return None
+    first = record.args[0]
+    if isinstance(first, Job):
+        return first.id
+    if record.msg == "Error running job %s" and isinstance(first, str):
+        return first
+    return None
+
+
+class _SchedulerFailureFilter(logging.Filter):
+    """Sanitize executor LogRecords without changing job exceptions or events."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not record.exc_info and not record.exc_text:
+            return True
+        try:
+            job_id = _scheduler_log_job_id(record)
+            error_type = type(record.exc_info[1]).__name__ if record.exc_info else "Exception"
+            safe_trace = _safe_scheduler_trace(record)
+            record.msg = "scheduled_job_failed job_id=%r error_type=%s"
+            record.args = (job_id, error_type)
+        except Exception:
+            record.msg = "scheduled_job_failed; exception details omitted"
+            record.args = ()
+            safe_trace = "Exception details unavailable"
+        record.exc_info = None
+        record.exc_text = safe_trace
+        record.stack_info = None
+        record.message = record.getMessage()
+        return True
+
+
+_SCHEDULER_FAILURE_FILTER = _SchedulerFailureFilter()
+
+
+def _install_scheduler_failure_filter() -> None:
+    logging.getLogger(_EXECUTOR_LOGGER).addFilter(_SCHEDULER_FAILURE_FILTER)
 
 
 def _duration_ms(started_at: float) -> int:
@@ -54,7 +113,11 @@ def _with_retry(
         status = "failed" if attempt_number >= retry_config.attempts else "retry"
         duration_ms = _duration_ms(started_at)
         err_type = type(exception).__name__ if exception is not None else None
-        err_text = str(exception) if exception is not None else None
+        err_text = (
+            f"Execução falhou ({err_type}); mensagem da exceção omitida."
+            if exception is not None
+            else None
+        )
         finished_at = datetime.now(UTC).isoformat()
         outcome: ExecutionOutcome = "failed_final" if status == "failed" else "failed_retry"
         if execution_store is not None:
@@ -145,6 +208,7 @@ class SchedulerApp:
         execution_store: JobExecutionStore | None = None,
     ) -> BlockingScheduler:
         cfg = config if config is not None else self.load_config()
+        _install_scheduler_failure_filter()
         executors = {"default": ThreadPoolExecutor(max_workers=4)}
         job_defaults: dict[str, object] = {"coalesce": True, "max_instances": 1}
         scheduler = BlockingScheduler(

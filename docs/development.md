@@ -39,6 +39,8 @@ Coverage (mirrors CI on Python 3.12):
 pytest --cov=py_scheduler --cov-report=term-missing
 ```
 
+CI retains `coverage.xml` as an artifact for every tested pull request. External Codecov uploads are disabled for all events; the disabled job has no OIDC upload permission or static upload token. Authorize the report and destination explicitly before separately reviewing any future change that enables that transfer. PyPI publishing grants OIDC only to a separate publication job on a published release. Manual dispatch builds reviewable distribution artifacts and does not publish to PyPI.
+
 ## Fast wiring check
 
 Without starting the blocking scheduler:
@@ -59,17 +61,17 @@ Press **Ctrl+C** to shut down gracefully (`shutdown(wait=True)`).
 
 ## Docker
 
-Build and run (expose metrics on host port 9100):
+Build and run with the bundled configuration:
 
 ```bash
 docker build -t py-scheduler .
-docker run --rm -p 9100:9100 py-scheduler
+docker run --rm py-scheduler
 ```
 
-Mount custom config and persistent SQLite:
+The bundled configuration binds metrics to loopback **inside the container**. Publishing a Docker port does not make that listener reachable from the host. For a host-side scraper, explicitly set `metrics_host: 0.0.0.0` in a trusted custom configuration and publish only the host loopback address:
 
 ```bash
-docker run --rm -p 9100:9100 \
+docker run --rm -p 127.0.0.1:9100:9100 \
   -v "$(pwd)/my-config.yaml:/app/config/config.yaml:ro" \
   -v py-scheduler-data:/data \
   -e PY_SCHEDULER_JOBS_MODULE=mycompany.scheduler_jobs \
@@ -77,6 +79,10 @@ docker run --rm -p 9100:9100 \
 ```
 
 Set `database_path: /data/scheduler.sqlite` in your YAML when using the `/data` volume.
+
+The explicit external container bind is unauthenticated. Other containers on an accessible Docker network may still reach it; the host port's loopback binding does not isolate the container network. Use an appropriate private network/firewall or an authenticated TLS proxy for remote scraping.
+
+For environment-based webhook credentials, let your deployment's secret manager inject the named variables. With locally exported values, Docker's `-e SCHEDULER_WEBHOOK_URL -e SCHEDULER_WEBHOOK_TOKEN` passes the variables by name without writing their values into the command. Refer to those names in YAML; do not put real secrets into committed examples or image layers. The process environment remains readable to sufficiently privileged operators.
 
 ## Adding jobs without forking core
 

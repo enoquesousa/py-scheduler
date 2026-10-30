@@ -187,7 +187,7 @@ class TestWebhookNotifierHTTP(unittest.TestCase):
 
     def test_post_failure_and_success_payloads(self) -> None:
         base = f"http://127.0.0.1:{self._port}/wh"
-        cfg = WebhookConfig(url=base, timeout_seconds=5)
+        cfg = WebhookConfig(url=base, timeout_seconds=5, allow_loopback_http=True)
         n = WebhookNotifier.from_config(cfg)
 
         n.notify_job_failed("jid-1", "tarefa_x", "algo correu mal")
@@ -213,6 +213,7 @@ class TestWebhookNotifierHTTP(unittest.TestCase):
         base = f"http://127.0.0.1:{self._port}/wh"
         cfg = WebhookConfig(
             url=base,
+            allow_loopback_http=True,
             timeout_seconds=5,
             failure_alert_silence_minutes=60.0,
         )
@@ -230,6 +231,7 @@ class TestWebhookNotifierHTTP(unittest.TestCase):
         base = f"http://127.0.0.1:{self._port}/wh"
         cfg = WebhookConfig(
             url=base,
+            allow_loopback_http=True,
             timeout_seconds=5,
             failure_alert_silence_minutes=60.0,
         )
@@ -242,6 +244,7 @@ class TestWebhookNotifierHTTP(unittest.TestCase):
         base = f"http://127.0.0.1:{self._port}/wh"
         cfg = WebhookConfig(
             url=base,
+            allow_loopback_http=True,
             timeout_seconds=5,
             failure_alert_silence_minutes=60.0,
         )
@@ -287,6 +290,7 @@ class TestWebhookNotifierHTTP(unittest.TestCase):
             base = f"http://127.0.0.1:{self._port}/wh"
             cfg = WebhookConfig(
                 url=base,
+                allow_loopback_http=True,
                 timeout_seconds=5,
                 failure_alert_silence_minutes=60.0,
             )
